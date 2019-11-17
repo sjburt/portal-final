@@ -1,4 +1,8 @@
 #include <Arduino.h>
+#include <vector>
+
+#define HWSERIAL Serial1
+
 #define BOARD_IDENTIFY_WARNING
 #define USE_OCTOWS2811
 #include <OctoWS2811.h>
@@ -11,6 +15,7 @@
 
 #define OUR_PURPLE CRGB(CRGB::Purple).nscale8_video(128)
 #define OUR_CYAN CRGB(CRGB::Cyan).nscale8_video(128)
+#define OUR_GREEN CRGB(0,128,0)
 #define OUR_SPARKLE CRGB::White
 
 #if defined(FRAME_RATE)
@@ -23,6 +28,30 @@ CRGBArray<NUM_LEDS> leds;
 
 uint16_t fade_count[NUM_LEDS];
 
+void send_cmd(std::vector<uint8_t> cmd) {
+  HWSERIAL.write(0x7e);
+  HWSERIAL.write(cmd.size()+1);
+  HWSERIAL.write(cmd.data(), cmd.size());
+  HWSERIAL.write(0xef);
+}
+
+void mp3_init() {
+  HWSERIAL.begin(9600);
+  HWSERIAL.setTX(1);
+  std::vector<uint8_t> set_device = {9, 1};
+  std::vector<uint8_t> set_volume = {6, 0x14};
+  send_cmd(set_device);
+  send_cmd(set_volume);
+}
+
+void mp3_play_track(uint8_t track) {
+  send_cmd({0x12, 1, track});
+  send_cmd({0x0d});
+}
+
+
+
+
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
@@ -31,15 +60,13 @@ void setup() {
   pinMode(PIN_A3, INPUT);
 
   Serial.begin(115200);
-
+  mp3_init();
   delay(125);
   // FastLED.addLeds<NEOPIXEL, 2>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip).setDither(DISABLE_DITHER);
   FastLED.addLeds<OCTOWS2811>(leds, NUM_LEDS_PER_STRIP);
   FastLED.setCorrection(TypicalLEDStrip);
 
-  FastLED.setMaxPowerInVoltsAndMilliamps(5,2000);
-
-  leds.fill_solid(OUR_PURPLE);
+  FastLED.setMaxPowerInVoltsAndMilliamps(5,20000);
 
   randomSeed(0);
 }
@@ -114,9 +141,9 @@ void sparks(uint16_t frame_count) {
 #define CH_FR 20  // pixels per second
 #define MS_PER_PIX  (1000 / CH_FR)
 #define PX_SPACE 10
-void pink_chase(elapsedMillis phase) {
+void pink_chase(elapsedMillis t_milli) {
 
-  int offset = phase / MS_PER_PIX;
+  int offset = t_milli / MS_PER_PIX;
 
 
   for (int i = 0; i < leds.len; i++) {
@@ -157,10 +184,10 @@ uint16_t get_height(uint16_t i) {
   return 0;
 }
 
-#define RISE_RATE 0.0    // LEDs per sec
+#define RISE_RATE 20.0    // LEDs per sec
 #define SPACING   20.0     // Distance between chases
 
-void rising_chase(elapsedMillis phase) {
+void rising_chase(elapsedMillis t_milli) {
   for (int i = 0; i < leds.len; i++) {
 
     if (get_pix_side(i) == TOP) {
@@ -168,10 +195,10 @@ void rising_chase(elapsedMillis phase) {
     } else {
     uint16_t height = get_height(i);   // how many pixels up from the ground
 
-    auto q = fmodf((2*RISE_RATE*phase/1000.0-(height-HEIGHT)), SPACING);
+    auto q = fmodf((2*RISE_RATE*t_milli/1000.0-(height-HEIGHT)), SPACING);
     auto brightness = max(0, abs(q-SPACING)-SPACING+1);
 
-    leds[i] = OUR_CYAN;
+    leds[i] = OUR_GREEN;
     leds[i].nscale8_video(brightness*255);
 
 
@@ -179,8 +206,56 @@ void rising_chase(elapsedMillis phase) {
   }
 }
 
+typedef enum {
+  RISE_IN,
+  RISING_GR,
+  RISING_SPARKS,
+  SPARKS,
+  FADEOUT
+} phase_e;
 
-elapsedMillis phase;
+phase_e get_phase(elapsedMillis t_milli){
+  if (t_milli < 5000) return RISE_IN;
+  if (t_milli < 7000) return RISING_GR;
+  if (t_milli < 12000) return RISING_SPARKS;
+  if (t_milli < 20000) return SPARKS;
+  return FADEOUT;
+}
+
+
+void norm_sequence(elapsedMillis t_milli) {
+
+  phase_e phase = get_phase(t_milli);
+
+  switch (phase)
+  {
+  case RISE_IN:
+    rising_chase(t_milli);
+    leds.nblend(CRGB::Black, (255*(5000-t_milli)/5000.0));
+    break;
+  case RISING_GR:
+    rising_chase(t_milli);
+    break;
+   case RISING_SPARKS:
+    rising_chase(t_milli);
+    sparks(200);
+    break;
+  case SPARKS:
+    sparks(400);
+    if (t_milli<1800) leds.fadeToBlackBy(64);
+    break;
+
+  default:
+    leds.fadeToBlackBy(1);
+    break;
+  }
+
+
+
+}
+
+
+elapsedMillis t_milli;
 
 void loop() {
   static uint8_t current_setting;
@@ -188,7 +263,7 @@ void loop() {
   static uint8_t new_setting;
   new_setting = map(analogRead(PIN_A3), 0, 1023, 0, 9);
   // Serial.printf("%i\n", new_setting);
-  if (current_setting != new_setting) phase = 0;
+  if (current_setting != new_setting) t_milli = 0;
 
   current_setting = new_setting;
 
@@ -198,29 +273,18 @@ void loop() {
       break;
     case 1:
       purble();
+      sparks(50);
       break;
     case 2:
       purble();
       sparks(300);
       break;
     case 3:
-      sparks(300);
-      leds.fadeToBlackBy(4);
+      mp3_play_track(2);
+      norm_sequence(t_milli);
       break;
-    case 4:
-      sparks(300);
-      break;
-    case 5:
-      pink_chase(phase);
-      sparks(500);
-      break;
-    case 6:
-      pink_chase(phase);
-      break;
-    case 7:
-      rising_chase(phase);
-      sparks(200);
-      break;
+
+
     default:
       leds.fadeToBlackBy(1);
   }
