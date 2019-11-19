@@ -197,6 +197,7 @@ void portale(elapsedMillis t_milli) {
     } else {
       uint32_t color = pow(20+i, 3);
       leds[i] = CHSV(color % 256, 255, 32);
+
     }
   }
 }
