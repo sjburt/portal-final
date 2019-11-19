@@ -160,7 +160,7 @@ typedef enum {
 } location_e;
 
 #define HEIGHT 120
-#define WIDTH (NUM_LEDS_PER_STRIP - (2*HEIGHT))
+#define WIDTH 65
 location_e get_pix_side(uint16_t pixel) {
   pixel %= NUM_LEDS_PER_STRIP;    // where in the strip we are
 
@@ -177,17 +177,36 @@ uint16_t get_height(uint16_t i) {
     case LEFT:
       return strip_loc;
     case TOP:
-      return HEIGHT;
+      return (strip_loc - HEIGHT) * (NUM_LEDS_PER_STRIP-HEIGHT-WIDTH-HEIGHT)/(WIDTH) + HEIGHT;
     case RIGHT:
       return NUM_LEDS_PER_STRIP - strip_loc;
   }
   return 0;
 }
 
-#define RISE_RATE 20.0    // LEDs per sec
+#define PORTAL_SPACING 20
+#define PORTAL_SPEED   .1  // Seconds per portal
+
+void portale(elapsedMillis t_milli) {
+  int portal_distance = floor(fmodf((t_milli / 1000.0) / PORTAL_SPEED, PORTAL_SPACING));
+  // Serial.printf("portal distance %i", portal_distance);
+  for (int i = 0; i < leds.len; i++) {
+    uint8_t portal_no = (i/NUM_LEDS_PER_STRIP);
+    if (portal_no == portal_distance) {
+      leds[i] = CRGB::Black;
+    } else {
+      uint32_t color = pow(20+i, 3);
+      leds[i] = CHSV(color % 256, 255, 32);
+    }
+  }
+}
+
+
+
+
 #define SPACING   20.0     // Distance between chases
 
-void rising_chase(elapsedMillis t_milli) {
+void rising_chase(elapsedMillis t_milli, float rise_rate) {
   for (int i = 0; i < leds.len; i++) {
 
     if (get_pix_side(i) == TOP) {
@@ -195,7 +214,7 @@ void rising_chase(elapsedMillis t_milli) {
     } else {
     uint16_t height = get_height(i);   // how many pixels up from the ground
 
-    auto q = fmodf((2*RISE_RATE*t_milli/1000.0-(height-HEIGHT)), SPACING);
+    auto q = fmodf((2*rise_rate*t_milli/1000.0-(height-HEIGHT)), SPACING);
     auto brightness = max(0, abs(q-SPACING)-SPACING+1);
 
     leds[i] = OUR_GREEN;
@@ -222,31 +241,32 @@ phase_e get_phase(elapsedMillis t_milli){
   return FADEOUT;
 }
 
-
+#define MAX_RR 20
 void norm_sequence(elapsedMillis t_milli) {
 
   phase_e phase = get_phase(t_milli);
 
+  float rise_rate =  map((int)t_milli, 0.0, 12000, 5, MAX_RR);
   switch (phase)
   {
   case RISE_IN:
-    rising_chase(t_milli);
+    rising_chase(t_milli, rise_rate);
     leds.nblend(CRGB::Black, (255*(5000-t_milli)/5000.0));
     break;
   case RISING_GR:
-    rising_chase(t_milli);
+    rising_chase(t_milli, rise_rate);
     break;
    case RISING_SPARKS:
-    rising_chase(t_milli);
+    rising_chase(t_milli, rise_rate);
     sparks(200);
     break;
   case SPARKS:
-    sparks(400);
-    if (t_milli<1800) leds.fadeToBlackBy(64);
+    rising_chase(t_milli, MAX_RR);
+    sparks(map((int)t_milli, 12000, 20000, 200, 10000));
     break;
 
   default:
-    leds.fadeToBlackBy(1);
+    portale(t_milli);
     break;
   }
 
@@ -276,8 +296,7 @@ void loop() {
       sparks(50);
       break;
     case 2:
-      purble();
-      sparks(300);
+      portale(t_milli);
       break;
     case 3:
       mp3_play_track(2);
