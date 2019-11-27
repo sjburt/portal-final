@@ -11,12 +11,12 @@
 #define NUM_LEDS_PER_STRIP 300
 #define NUM_STRIPS 5
 #define NUM_LEDS NUM_LEDS_PER_STRIP * NUM_STRIPS
-#define FRAME_RATE 100
+#define FRAME_RATE 60
 
-#define OUR_PURPLE CRGB(CRGB::Purple).nscale8_video(128)
-#define OUR_CYAN CRGB(CRGB::Cyan).nscale8_video(128)
-#define OUR_GREEN CRGB(0,128,0)
-#define OUR_SPARKLE CRGB::White
+#define OUR_PURPLE CRGB(CRGB::Purple).nscale8_video(64)
+#define OUR_CYAN CRGB(CRGB::Cyan).nscale8_video(64)
+#define OUR_GREEN CRGB(0,255,0);
+#define OUR_SPARKLE CRGB::White * .75;
 
 #if defined(FRAME_RATE)
   #define UWAIT ((1E6 / FRAME_RATE))
@@ -39,14 +39,15 @@ void mp3_init() {
   HWSERIAL.begin(9600);
   HWSERIAL.setTX(1);
   std::vector<uint8_t> set_device = {9, 1};
-  std::vector<uint8_t> set_volume = {6, 0x14};
-  send_cmd(set_device);
+  std::vector<uint8_t> set_volume = {6, 0x10};
+  // send_cmd({0x0c});
+  send_cmd({0x0e});
   send_cmd(set_volume);
+  send_cmd(set_device);
 }
 
 void mp3_play_track(uint8_t track) {
   send_cmd({0x12, 1, track});
-  send_cmd({0x0d});
 }
 
 
@@ -57,16 +58,16 @@ void setup() {
   digitalWrite(LED_BUILTIN, HIGH);
   pinMode(18, OUTPUT);
   digitalWrite(18, HIGH);
+  analogReadAveraging(32);
   pinMode(PIN_A3, INPUT);
 
-  Serial.begin(115200);
   mp3_init();
   delay(125);
   // FastLED.addLeds<NEOPIXEL, 2>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip).setDither(DISABLE_DITHER);
   FastLED.addLeds<OCTOWS2811>(leds, NUM_LEDS_PER_STRIP);
   FastLED.setCorrection(TypicalLEDStrip);
 
-  FastLED.setMaxPowerInVoltsAndMilliamps(5,20000);
+  FastLED.setMaxPowerInVoltsAndMilliamps(5,40000);
 
   randomSeed(0);
 }
@@ -76,13 +77,13 @@ elapsedMicros framecounter;
 
 void send_leds() {
   FastLED.show();
-  digitalWriteFast(LED_BUILTIN, LOW);
+  // digitalWriteFast(LED_BUILTIN, LOW);
   uint32_t micros_to_go = UWAIT - framecounter;
   uint32_t delay = micros_to_go / 1000;
 
   FastLED.delay(delay);
   framecounter -= (delay*1000);
-  digitalWriteFast(LED_BUILTIN, HIGH);
+  // digitalWriteFast(LED_BUILTIN, HIGH);
 }
 
 
@@ -159,7 +160,7 @@ typedef enum {
   LEFT, TOP, RIGHT
 } location_e;
 
-#define HEIGHT 120
+#define HEIGHT 115
 #define WIDTH 65
 location_e get_pix_side(uint16_t pixel) {
   pixel %= NUM_LEDS_PER_STRIP;    // where in the strip we are
@@ -184,28 +185,27 @@ uint16_t get_height(uint16_t i) {
   return 0;
 }
 
-#define PORTAL_SPACING 20
-#define PORTAL_SPEED   .1  // Seconds per portal
+#define PORTAL_SPACING 10
+#define PORTAL_SPEED   .2  // Seconds per portal
 
 void portale(elapsedMillis t_milli) {
   int portal_distance = floor(fmodf((t_milli / 1000.0) / PORTAL_SPEED, PORTAL_SPACING));
+  static uint8_t p_seed[NUM_STRIPS];
   // Serial.printf("portal distance %i", portal_distance);
   for (int i = 0; i < leds.len; i++) {
     uint8_t portal_no = (i/NUM_LEDS_PER_STRIP);
     if (portal_no == portal_distance) {
-      leds[i] = CRGB::Black;
+      leds[i] = CRGB::White;
+      p_seed[portal_no]++;
     } else {
-      uint32_t color = pow(20+i, 3);
-      leds[i] = CHSV(color % 256, 255, 32);
-
+      uint32_t color = pow(20+i+256, 3);
+      leds[i] = CHSV(color % 256, 255, 128);
     }
   }
 }
 
 
-
-
-#define SPACING   20.0     // Distance between chases
+#define SPACING   10.0     // Distance between chases
 
 void rising_chase(elapsedMillis t_milli, float rise_rate) {
   for (int i = 0; i < leds.len; i++) {
@@ -220,40 +220,72 @@ void rising_chase(elapsedMillis t_milli, float rise_rate) {
 
     leds[i] = OUR_GREEN;
     leds[i].nscale8_video(brightness*255);
+    }
+  }
+}
 
+void set_portal(int portal) {
 
+  for (int i = 0; i < leds.len; i++) {
+    if (portal == (i/NUM_LEDS_PER_STRIP)) {
+      leds[i] = CRGB::DarkCyan;
     }
   }
 }
 
 typedef enum {
+  PHASE_OUT,
   RISE_IN,
   RISING_GR,
   RISING_SPARKS,
   SPARKS,
-  FADEOUT
+  PORTAL,
+  BLOOP,
 } phase_e;
 
+#define START_RISE 1000
+#define FULL_PWR_RISE 4000
+#define SPARKY_RISE 7000
+#define FULL_ON 11200
+#define ENTER 15000
+
 phase_e get_phase(elapsedMillis t_milli){
-  if (t_milli < 5000) return RISE_IN;
-  if (t_milli < 7000) return RISING_GR;
-  if (t_milli < 12000) return RISING_SPARKS;
-  if (t_milli < 20000) return SPARKS;
-  return FADEOUT;
+
+  if (t_milli > 3000 && t_milli < 3050) return BLOOP;
+  if (t_milli > 4400 && t_milli < 4450) return BLOOP;
+  if (t_milli > 5700 && t_milli < 5750) return BLOOP;
+  if (t_milli > 6100 && t_milli < 6200) return BLOOP;
+  // if (t_milli > 7000 && t_milli < 7100) return BLOOP;
+  // if (t_milli > 8000 && t_milli < 8100) return BLOOP;
+  // if (t_milli > 8400 && t_milli < 8500) return BLOOP;
+
+  if (t_milli < START_RISE) return PHASE_OUT;
+  if (t_milli < FULL_PWR_RISE) return RISE_IN;
+  if (t_milli < SPARKY_RISE) return RISING_GR;
+  if (t_milli < FULL_ON) return RISING_SPARKS;
+  if (t_milli < ENTER) return SPARKS;
+  return PORTAL;
 }
 
 #define MAX_RR 20
 void norm_sequence(elapsedMillis t_milli) {
 
   phase_e phase = get_phase(t_milli);
-
-  float rise_rate =  map((int)t_milli, 0.0, 12000, 5, MAX_RR);
+  static int portal_to_light;
+  float rise_rate =  map((int)t_milli, (START_RISE * 1.0), SPARKY_RISE, 5, MAX_RR);
   switch (phase)
   {
-  case RISE_IN:
-    rising_chase(t_milli, rise_rate);
-    leds.nblend(CRGB::Black, (255*(5000-t_milli)/5000.0));
+  case PHASE_OUT: {
+    // purble();
+    leds.fadeToBlackBy(5);
     break;
+  }
+  case RISE_IN: {
+    rising_chase(t_milli, rise_rate);
+    uint8_t blend = map((int)t_milli, START_RISE*1.0, FULL_PWR_RISE, 255,0);
+    leds.nblend(CRGB::Black, blend);
+    break;
+  }
   case RISING_GR:
     rising_chase(t_milli, rise_rate);
     break;
@@ -263,16 +295,17 @@ void norm_sequence(elapsedMillis t_milli) {
     break;
   case SPARKS:
     rising_chase(t_milli, MAX_RR);
-    sparks(map((int)t_milli, 12000, 20000, 200, 10000));
+    sparks(map((int)t_milli, (FULL_ON * 1.0), ENTER, 200, 10000));
     break;
-
-  default:
+  case BLOOP:
+    set_portal(portal_to_light++);
+    portal_to_light %= NUM_STRIPS;
+  case PORTAL:
     portale(t_milli);
     break;
+  default:
+    purble();
   }
-
-
-
 }
 
 
@@ -280,35 +313,35 @@ elapsedMillis t_milli;
 
 void loop() {
   static uint8_t current_setting;
-
+  static bool started = false;
   static uint8_t new_setting;
   new_setting = map(analogRead(PIN_A3), 0, 1023, 0, 9);
-  // Serial.printf("%i\n", new_setting);
-  if (current_setting != new_setting) t_milli = 0;
+
+  if (current_setting != new_setting) { 
+    t_milli = 0;
+    started = true;
+  }
 
   current_setting = new_setting;
-
+  digitalWriteFast(LED_BUILTIN, LOW);
   switch(current_setting) {
-    case 0:
-      leds.fadeToBlackBy(2);
+    case 2:
+      leds.fadeToBlackBy(1);
       break;
     case 1:
       purble();
-      sparks(50);
       break;
-    case 2:
-      portale(t_milli);
-      break;
-    case 3:
-      mp3_play_track(2);
+    case 0:
+      if (started) {
+        mp3_play_track(1);
+        started = false;
+      }
       norm_sequence(t_milli);
+      digitalWriteFast(LED_BUILTIN, HIGH);
       break;
-
-
     default:
-      leds.fadeToBlackBy(1);
+      purble();
   }
 
   send_leds();
-
 }
